@@ -40,7 +40,7 @@ do_cbc_mac (gcry_cipher_hd_t c, const unsigned char *inbuf, size_t inlen,
 {
   const unsigned int blocksize = 16;
   gcry_cipher_encrypt_t enc_fn = c->spec->encrypt;
-  unsigned char tmp[blocksize];
+  unsigned char tmp[16]; // Same as blocksize, MSVC complains
   unsigned int burn = 0;
   unsigned int unused = c->u_mode.ccm.mac_unused;
   size_t nblocks;

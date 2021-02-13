@@ -717,7 +717,7 @@ static void ccm_aead_init(gcry_cipher_hd_t hd, size_t buflen, int authlen)
 {
   const int _L = 4;
   const int noncelen = 15 - _L;
-  char nonce[noncelen];
+  char nonce[11]; // Same as noncelen, MSVC complains
   u64 params[3];
   gcry_error_t err = GPG_ERR_NO_ERROR;
 
