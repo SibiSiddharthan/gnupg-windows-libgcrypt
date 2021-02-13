@@ -897,13 +897,14 @@ bench_encrypt_init (struct bench_obj *obj)
   keylen = gcry_cipher_get_algo_keylen (mode->algo);
   if (keylen)
     {
-      char key[keylen];
+      char *key = (char*)malloc(sizeof(char)*keylen);
       int i;
 
       for (i = 0; i < keylen; i++)
 	key[i] = 0x33 ^ (11 - i);
 
       err = gcry_cipher_setkey (hd, key, keylen);
+      free(key);
       if (err)
 	{
 	  fprintf (stderr, PGM ": gcry_cipher_setkey failed: %s\n",
@@ -1006,13 +1007,14 @@ bench_xts_encrypt_init (struct bench_obj *obj)
   keylen = gcry_cipher_get_algo_keylen (mode->algo) * 2;
   if (keylen)
     {
-      char key[keylen];
+      char *key = (char*)malloc(sizeof(char)*keylen);
       int i;
 
       for (i = 0; i < keylen; i++)
 	key[i] = 0x33 ^ (11 - i);
 
       err = gcry_cipher_setkey (hd, key, keylen);
+      free(key);
       if (err)
 	{
 	  fprintf (stderr, PGM ": gcry_cipher_setkey failed: %s\n",

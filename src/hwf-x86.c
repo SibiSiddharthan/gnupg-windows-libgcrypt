@@ -28,7 +28,7 @@
 #include "g10lib.h"
 #include "hwf-common.h"
 
-#if !defined (__i386__) && !defined (__x86_64__)
+#if !defined (__i386__) && !defined (__x86_64__) && !defined (_M_X64) && !defined (_M_X86)
 # error Module build for wrong CPU.
 #endif
 

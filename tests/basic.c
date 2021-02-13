@@ -33,8 +33,10 @@
 #define PGM "basic"
 #include "t-common.h"
 
-#if __GNUC__ >= 4
+#if defined(__GNUC__) || defined(__clang__)
 #  define ALWAYS_INLINE __attribute__((always_inline))
+#elif defined(_MSC_VER)
+#  define ALWAYS_INLINE __forceinline
 #endif
 
 typedef struct test_spec_pubkey_key

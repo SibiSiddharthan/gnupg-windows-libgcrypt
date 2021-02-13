@@ -50,7 +50,13 @@
  */
 
 #undef _FORTIFY_SOURCE
-#pragma GCC optimize ("O0")
+#if defined(__GNUC__)
+# pragma GCC optimize ("O0")
+#elif defined(__clang__)
+# pragma clang optimize off
+#elif defined(_MSC_VER)
+# pragma optimize("", off)
+#endif
 
 #include "jitterentropy.h"
 
