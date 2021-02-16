@@ -446,27 +446,32 @@ endif()
 
 if(NOT DISABLE_ASM)
 
-file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/mpi/sysdep.h "#define C_SYMBOL_NAME(name) name\n")
+file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/mpi/sysdep.h
+CONTENT "#define C_SYMBOL_NAME(name) name \n" NEWLINE_STYLE LF)
+
 file(GLOB mpi_asm mpi/amd64/*.S)
 foreach(f ${mpi_asm})
 # For windows the macro replacement does not preserve tabs for the files defined in func_abi.h
 # We manually replace this to fix the issue.
 	if(WIN32)
 		file(STRINGS ${f} content NEWLINE_CONSUME)
-		string(REPLACE "FUNC_ENTRY()"
+		string(REPLACE "${CMAKE_CURRENT_SOURCE_DIR}/mpi/amd64/" "" f ${f})
+		if(NOT EXISTS ${CMAKE_CURRENT_BINARY_DIR}/mpi/${f})
+			string(REPLACE "FUNC_ENTRY()"
 	"pushq %rsi
 	pushq %rdi
 	movq %rdx, %rsi
 	movq %rcx, %rdi
 	movq %r8, %rdx
 	movq %r9, %rcx"
-	content ${content})
-		string(REPLACE "FUNC_EXIT()"
+		content ${content})
+			string(REPLACE "FUNC_EXIT()"
 	"popq %rdi
 	popq %rsi"
-	content ${content})
-		string(REPLACE "${CMAKE_CURRENT_SOURCE_DIR}/mpi/amd64/" "" f ${f})
-		file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/mpi/${f} ${content})
+		content ${content})
+			file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/mpi/${f} ${content})
+		endif()
+		list(APPEND CLEAN_FILES ${CMAKE_CURRENT_BINARY_DIR}/mpi/${f}) # Add it here only as the timestamp changes every time when we configure
 	else()
 		file(COPY ${f} DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/mpi)
 	endif()
@@ -475,39 +480,45 @@ endforeach()
 file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/mpi/amd64/mpi-asm-defs.h DESTINATION
 	${CMAKE_CURRENT_BINARY_DIR}/mpi)
 
-file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/mpi/mod-source-info.h
-"static char mod_source_info[] =\n")
+string(APPEND mod_source_info_content "static char mod_source_info[] =\n")
 foreach(f ${mpi_asm})
 	string(REPLACE "${CMAKE_CURRENT_SOURCE_DIR}/mpi/" "" nf ${f})
 	string(REPLACE "amd64" ":amd64" nf ${nf})
-	file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/mpi/mod-source-info.h
-"\"${nf}\"\n")
+	string(APPEND mod_source_info_content "\"${nf}\"\n")
 endforeach()
-file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/mpi/mod-source-info.h ";")
+
 
 # Create asm-syntax.h by concatenating i386/syntax.h and amd64/func_abi.h
-file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/mpi/asm-syntax.h "\n")
-file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/mpi/asm-syntax.h "#define ELF_SYNTAX\n")
-file(READ mpi/i386/syntax.h content)
-file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/mpi/asm-syntax.h ${content})
-file(READ mpi/amd64/func_abi.h content)
-file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/mpi/asm-syntax.h ${content})
+if(NOT EXISTS ${CMAKE_CURRENT_BINARY_DIR}/mpi/asm-syntax.h)
+	file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/mpi/asm-syntax.h "\n")
+	file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/mpi/asm-syntax.h "#define ELF_SYNTAX\n")
+	file(READ mpi/i386/syntax.h content)
+	file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/mpi/asm-syntax.h ${content})
+	file(READ mpi/amd64/func_abi.h content)
+	file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/mpi/asm-syntax.h ${content})
+endif()
+list(APPEND CLEAN_FILES ${CMAKE_CURRENT_BINARY_DIR}/mpi/asm-syntax.h)
 
 else() # ASM disabled
+
 file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/mpi/generic/mpi-asm-defs.h DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/mpi)
 file(GLOB mpi_c mpi/generic/*.c)
 
-file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/mpi/mod-source-info.h
-"static char mod_source_info[] =\n")
+string(APPEND mod_source_info_content "static char mod_source_info[] =\n")
 foreach(f ${mpi_c})
 	string(REPLACE "${CMAKE_CURRENT_SOURCE_DIR}/mpi/" "" nf ${f})
 	string(REPLACE "amd64" ":amd64" nf ${nf})
-	file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/mpi/mod-source-info.h
-"\"${nf}\"\n")
+	string(APPEND mod_source_info_content "\"${nf}\"\n")
 endforeach()
-file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/mpi/mod-source-info.h ";")
 
 endif()
+
+# Generate mod-source-info.h
+string(APPEND mod_source_info_content ";")
+file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/mpi/mod-source-info.h
+CONTENT "${mod_source_info_content}" NEWLINE_STYLE LF)
+
+set_directory_properties(PROPERTIES ADDITIONAL_CLEAN_FILES "${CLEAN_FILES}")
 
 include_directories(${CMAKE_CURRENT_BINARY_DIR} src ${CMAKE_CURRENT_BINARY_DIR}/mpi mpi)
 
@@ -731,6 +742,7 @@ install(TARGETS gcrypt dumpsexp mpicalc hmac256
 
 include(CTest)
 if(BUILD_TESTING)
+
 file(CREATE_LINK ${CMAKE_CURRENT_SOURCE_DIR}/tests/t-ed25519.inp ${CMAKE_CURRENT_BINARY_DIR}/t-ed25519.inp)
 set(tests
 version t-secmem mpitests t-sexp t-convert
