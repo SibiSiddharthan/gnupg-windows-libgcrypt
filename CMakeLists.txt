@@ -27,15 +27,16 @@ set(PACKAGE_TARNAME \"${PROJECT_NAME}\")
 set(PACKAGE_URL \"\")
 set(PACKAGE_VERSION \"${PROJECT_VERSION}\")
 set(VERSION \"${PROJECT_VERSION}\")
-set(VERSION_NUMBER 0x010805)
+math(EXPR VERSION_HEX "(${PROJECT_VERSION_MAJOR} << 16) + (${PROJECT_VERSION_MINOR} << 8) + ${PROJECT_VERSION_PATCH}" OUTPUT_FORMAT HEXADECIMAL)
+set(VERSION_NUMBER ${VERSION_HEX})
 
 #find_package(GPGRT REQUIRED)
-
 include(UtilityFunctions)
-include(CheckCSourceCompiles)
-include(CheckCSourceRuns)
-include(visibility)
+
+include(CheckEndianess)
 include(inline)
+include(mlock)
+include(visibility)
 
 set(BUILD_REVISION \"\")
 set(BUILD_TIMESTAMP \"\")
@@ -163,149 +164,103 @@ if(NOT HAVE_UINTPTR_T)
 	set(uintptr_t "unsigned\ long\ long")
 endif()
 
-check_c_source_runs("
-int main ()
-{
-	/* Are we little or big endian?  From Harbison&Steele.  */
-	union
-	{
-		long int l;
-		char c[sizeof (long int)];
-	} u;
-	u.l = 1;
-	return u.c[sizeof (long int) - 1] == 1;
-}"
-WORDS_LITTLEENDIAN)
-if(NOT WORDS_LITTLEENDIAN)
-	set(WORDS_BIGENDIAN 1)
-endif()
-
-if(HAVE_MLOCK)
-check_c_source_runs("
-#include <stdlib.h>
-#include <unistd.h>
-#include <errno.h>
-#include <sys/mman.h>
-#include <sys/types.h>
-#include <fcntl.h>
-
-int main()
-{
-    char *pool;
-    int err;
-    long int pgsize;
-
-#if ${HAVE_SYSCONF} && defined(_SC_PAGESIZE)
-    pgsize = sysconf (_SC_PAGESIZE);
-#elif  ${HAVE_GETPAGESIZE}
-    pgsize = getpagesize();
-#else
-    pgsize = -1;
-#endif
-
-    if (pgsize == -1)
-      pgsize = 4096;
-
-    pool = malloc( 4096 + pgsize );
-    if( !pool )
-        return 2;
-    pool += (pgsize - ((long int)pool % pgsize));
-
-    err = mlock( pool, 4096 );
-    if( !err || errno == EPERM || errno == EAGAIN)
-        return 0; /* okay */
-
-    return 1;  /* hmmm */
-}"
-MLOCK_OKAY)
-if(NOT MLOCK_OKAY)
-	set(HAVE_BROKEN_MLOCK 1)
-endif()
-endif()
-
 foreach(f __builtin_bswap32 __builtin_bswap64 __builtin_clz __builtin_clzl __builtin_ctz __builtin_ctzl)
 	string(TOUPPER ${f} uf)
-	check_c_source_compiles("
-			int	main ()
-			{
-				int x = 0; int y = ${f}(x); return y;
-				return 0;
-			}"
-			HAVE_${uf})
+	check_compile("Checking for ${f}" "found" "not found" "
+		int	main ()
+		{
+			int x = 0;
+			int y = ${f}(x);
+			return y;
+		}"
+		HAVE_${uf})
 endforeach()
 
-check_c_source_compiles("
-void a(){
+check_compile("Checking whether GCC assembler supports for CFI directives" "yes" "no" [[
+void a()
+{
 	__asm__(
-        \".text\\\\n\\\\t\"
-        \"ac_test:\\\\n\\\\t\"
-        \".cfi_startproc\\\\n\\\\t\"
-        \".cfi_remember_state\\\\n\\\\t\"
-        \".cfi_adjust_cfa_offset 8\\\\n\\\\t\"
-        \".cfi_rel_offset 0, 8\\\\n\\\\t\"
-        \".cfi_def_cfa_register 1\\\\n\\\\t\"
-        \".cfi_register 2, 3\\\\n\\\\t\"
-        \".cfi_restore 2\\\\n\\\\t\"
-        \".cfi_escape 0x0f, 0x02, 0x11, 0x00\\\\n\\\\t\"
-        \".cfi_restore_state\\\\n\\\\t\"
-        \".long 0\\\\n\\\\t\"
-        \".cfi_endproc\\\\n\\\\t\"
-    );
-}
-int main () {return 0;}"
-HAVE_GCC_ASM_CFI_DIRECTIVES)
-
-check_c_source_compiles("
-void a(){
-	__asm__(
-		/* Test if ELF directives '.type' and '.size' are supported. */
-		\".text\\\\n\\\\t\"
-		\"asmfunc:\\\\n\\\\t\"
-		\".size asmfunc,.-asmfunc;\\\\n\\\\t\"
-		\".type asmfunc,STT_FUNC;\\\\n\\\\t\"
+		".text\n\t"
+		"ac_test:\n\t"
+		".cfi_startproc\n\t"
+		".cfi_remember_state\n\t"
+		".cfi_adjust_cfa_offset 8\n\t"
+		".cfi_rel_offset 0, 8\n\t"
+		".cfi_def_cfa_register 1\n\t"
+		".cfi_register 2, 3\n\t"
+		".cfi_restore 2\n\t"
+		".cfi_escape 0x0f, 0x02, 0x11, 0x00\n\t"
+		".cfi_restore_state\n\t"
+		".long 0\n\t"
+		".cfi_endproc\n\t"
 	);
 }
-int main () {return 0;}"
+int main () {return 0;}]]
+HAVE_GCC_ASM_CFI_DIRECTIVES)
+
+check_compile("Checking whether GCC assembler supports for ELF directives" "yes" "no" [[
+void a()
+{
+	__asm__(
+		/* Test if ELF directives '.type' and '.size' are supported. */
+		".text\n\t"
+		"asmfunc:\n\t"
+		".size asmfunc,.-asmfunc;\n\t"
+		".type asmfunc,STT_FUNC;\n\t"
+	);
+}
+int main () {return 0;}]]
 HAVE_GCC_ASM_ELF_DIRECTIVES)
 
-check_c_source_compiles("
-void a(void) { asm volatile(\"\":::\"memory\"); }
+check_compile("Checking whether inline assembly memory barrier is supported" "yes" "no" "
+void a(int x)
+{
+	asm volatile(\"\":::\"memory\");
+	asm volatile(\"\":\"+r\"(x)::\"memory\");
+}
 int main(){return 0;}"
 HAVE_GCC_ASM_VOLATILE_MEMORY)
 
-check_c_source_compiles("
+############################
+### GCC style attributes ###
+############################
+
+check_compile("Checking whether the GCC style aligned attribute is supported" "yes" "no" "
 struct { int a; } foo __attribute__ ((aligned (16)));
 int main(){return 0;}"
 HAVE_GCC_ATTRIBUTE_ALIGNED)
 
-check_c_source_compiles("
-typedef struct foo_s { int a; }
-            __attribute__ ((may_alias)) foo_t;
+check_compile("Checking whether the GCC style may_alias attribute is supported" "yes" "no" "
+typedef struct foo_s { int a; } __attribute__ ((may_alias)) foo_t;
 int main(){return 0;}"
 HAVE_GCC_ATTRIBUTE_MAY_ALIAS)
 
-check_c_source_compiles("
-int __attribute__ ((ms_abi)) proto(int);
-int main(){return 0;}"
-HAVE_GCC_ATTRIBUTE_MS_ABI)
-
-check_c_source_compiles("
+check_compile("Checking whether the GCC style packed attribute is supported" "yes" "no" "
 struct foolong_s { long b; } __attribute__ ((packed));
-struct foo_s { char a; struct foolong_s b; }
-  __attribute__ ((packed));
+struct foo_s { char a; struct foolong_s b; } __attribute__ ((packed));
 enum bar {
   FOO = 1 / (sizeof(struct foo_s) == (sizeof(char) + sizeof(long))),
 };
 int main(){return 0;}"
 HAVE_GCC_ATTRIBUTE_PACKED)
 
-check_c_source_compiles("
+############################
+########## ABI #############
+############################
+
+check_compile("Checking whether compiler supports 'ms_abi' function attribute" "yes" "no" "
+int __attribute__ ((ms_abi)) proto(int);
+int main(){return 0;}"
+HAVE_GCC_ATTRIBUTE_MS_ABI)
+
+check_compile("Checking whether compiler supports 'sysv_abi' function attribute" "yes" "no" "
 int __attribute__ ((sysv_abi)) proto(int);
 int main(){return 0;}"
 HAVE_GCC_ATTRIBUTE_SYSV_ABI)
 
-check_c_source_compiles("
-void *test(void) {
+check_compile("Checking whether default calling convention is 'ms_abi'" "yes" "no" "
+void *test(void)
+{
 	void *(*def_func)(void) = test;
 	void *__attribute__((ms_abi))(*msabi_func)(void);
 	/* warning on SysV abi targets, passes on Windows based targets */
@@ -315,8 +270,9 @@ void *test(void) {
 int main(){return 0;}"
 HAVE_GCC_DEFAULT_ABI_IS_MS_ABI)
 
-check_c_source_compiles("
-void *test(void) {
+check_compile("Checking whether default calling convention is 'sysv_abi'" "yes" "no" "
+void *test(void)
+{
 	void *(*def_func)(void) = test;
 	void *__attribute__((sysv_abi))(*sysvabi_func)(void);
 	/* warning on MS ABI targets, passes on SysV ABI targets */
@@ -326,59 +282,69 @@ void *test(void) {
 int main(){return 0;}"
 HAVE_GCC_DEFAULT_ABI_IS_SYSV_ABI)
 
-check_c_source_compiles("
-void a(void) {
+############################
+##### Inline assembler #####
+############################
+
+check_compile("Checking whether your inline assembler supports AVX instructions" "yes" "no" "
+void a(void)
+{
 	__asm__(\"xgetbv; vaesdeclast (%[mem]),%%xmm0,%%xmm7\"::[mem]\"r\"(0):);
-  }
+}
 int main(){return 0;}"
 HAVE_GCC_INLINE_ASM_AVX)
 
-check_c_source_compiles("
-void a(void) {
+check_compile("Checking whether your inline assembler supports AVX2 instructions" "yes" "no" "
+void a(void)
+{
 	__asm__(\"xgetbv; vpbroadcastb %%xmm7,%%ymm1\":::\"cc\");
-  }
+}
 int main(){a();return 0;}"
 HAVE_GCC_INLINE_ASM_AVX2)
 
-check_c_source_compiles("
+check_compile("Checking whether your inline assembler supports PCMUL instructions" "yes" "no" "
 void a(void) {
 	__asm__(\"pclmulqdq $0, %%xmm1, %%xmm3\":::\"cc\");
   }
 int main(){a();return 0;}"
 HAVE_GCC_INLINE_ASM_PCLMUL)
 
-check_c_source_compiles("
-void a(void) {
-	__asm__(\"sha1rnds4 \\$0, %%xmm1, %%xmm3\\\\n\\\\t\":::\"cc\");
-	__asm__(\"sha1nexte %%xmm1, %%xmm3\\\\n\\\\t\":::\"cc\");
-	__asm__(\"sha1msg1 %%xmm1, %%xmm3\\\\n\\\\t\":::\"cc\");
-	__asm__(\"sha1msg2 %%xmm1, %%xmm3\\\\n\\\\t\":::\"cc\");
-	__asm__(\"sha256rnds2 %%xmm0, %%xmm1, %%xmm3\\\\n\\\\t\":::\"cc\");
-	__asm__(\"sha256msg1 %%xmm1, %%xmm3\\\\n\\\\t\":::\"cc\");
-	__asm__(\"sha256msg2 %%xmm1, %%xmm3\\\\n\\\\t\":::\"cc\");
-  }
-int main(){a(); return 0;}"
+check_compile("Checking whether your inline assembler supports SHA extension instructions" "yes" "no" [[
+void a(void)
+{
+	__asm__("sha1rnds4 \$0, %%xmm1, %%xmm3\n\t":::"cc");
+	__asm__("sha1nexte %%xmm1, %%xmm3\n\t":::"cc");
+	__asm__("sha1msg1 %%xmm1, %%xmm3\n\t":::"cc");
+	__asm__("sha1msg2 %%xmm1, %%xmm3\n\t":::"cc");
+	__asm__("sha256rnds2 %%xmm0, %%xmm1, %%xmm3\n\t":::"cc");
+	__asm__("sha256msg1 %%xmm1, %%xmm3\n\t":::"cc");
+	__asm__("sha256msg2 %%xmm1, %%xmm3\n\t":::"cc");
+}
+int main(){a(); return 0;}]]
 HAVE_GCC_INLINE_ASM_SHAEXT)
 
-check_c_source_compiles("
-void a(void) {
+check_compile("Checking whether your inline assembler supports SSE4.1 instructions" "yes" "no" "
+void a(void)
+{
 	int i;
 	__asm__(\"pextrd $2, %%xmm0, %[out]\" : [out] \"=m\" (i));
-  }
+}
 int main(){a();return 0;}"
 HAVE_GCC_INLINE_ASM_SSE41)
 
-check_c_source_compiles("
+check_compile("Checking whether your inline assembler supports SSE3 instructions" "yes" "no" "
 static unsigned char be_mask[16] __attribute__ ((aligned (16))) =
-              { 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0 };
-void a(void) {
-  __asm__(\"pshufb %[mask], %%xmm2\"::[mask]\"m\"(*be_mask):);
+			{ 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0 };
+void a(void)
+{
+	__asm__(\"pshufb %[mask], %%xmm2\"::[mask]\"m\"(*be_mask):);
 }
 int main(){a();return 0;}"
 HAVE_GCC_INLINE_ASM_SSSE3)
 
-check_c_source_compiles("
-unsigned int a(unsigned int x, unsigned int y) {
+check_compile("Checking whether your inline assembler supports BMI2 instructions" "yes" "no" "
+unsigned int a(unsigned int x, unsigned int y)
+{
 	unsigned int tmp1, tmp2;
 	asm (\"rorxl %2, %1, %0\"
 		 : \"=r\" (tmp1)
@@ -387,42 +353,43 @@ unsigned int a(unsigned int x, unsigned int y) {
 		 : \"=r\" (tmp2)
 		 : \"r0\" (x), \"rm\" (y));
 	return tmp1 + tmp2;
-  }
+}
 int main(){a(1,2);return 0;}"
 HAVE_GCC_INLINE_ASM_BMI2)
 
-check_c_source_compiles("
+check_compile("Checking whether your assembler is compatible for AMD64 assembly implementations" "yes" "no" [[
 int main()
 {
 	__asm__(
-                /* Test if '.type' and '.size' are supported.  */
-                /* These work only on ELF targets. */
-		\"asmfunc:\"
-                \".size asmfunc,.-asmfunc;\"
-                \".type asmfunc,@function;\"
-		\"xorl $(123456789/12345678), %ebp;\"
-            );
+		/* Test if '.type' and '.size' are supported.  */
+		/* These work only on ELF targets. */
+		"asmfunc:"
+		".size asmfunc,.-asmfunc;"
+		".type asmfunc,@function;"
+		"xorl $(123456789/12345678), %ebp;"
+		);
 	return 0;
-}"
+}]]
 HAVE_COMPATIBLE_GCC_AMD64_PLATFORM_AS)
 
-check_c_source_compiles("
+check_compile("Checking whether your assembler is compatible for WIN64 assembly implementations" "yes" "no" [[
 int main()
 {
 	__asm__(
-              \".globl asmfunc\\\\n\\\\t\"
-              \"asmfunc:\"
-              \"xorq \\$(1234), %rbp;\"
+              ".globl asmfunc\n\t"
+              "asmfunc:"
+              "xorq \$(1234), %rbp;"
           );
 	return 0;
-}"
+}]]
 HAVE_COMPATIBLE_GCC_WIN64_PLATFORM_AS)
 
-check_c_source_compiles("
+check_compile("Checking for __sync_synchronize" "found" "not found" "
 int
 main ()
 {
-__sync_synchronize(); return 0;
+	__sync_synchronize();
+	return 0;
 }"
 HAVE_SYNC_SYNCHRONIZE)
 
